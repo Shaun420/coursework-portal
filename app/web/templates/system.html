@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}System — {{ portal_name }}{% endblock %}
+{% block content %}
+<div class="grid2">
+  <div class="panel">
+    <h2>Health</h2>
+    <div id="health" class="kv"></div>
+  </div>
+  <div class="panel">
+    <h2>Analysis queue</h2>
+    <div id="queue" class="kv"></div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Live metrics</h2>
+  <p class="muted small">Sampled every 3 s from this process.</p>
+  <table id="metrics">
+    <thead><tr><th>Requests</th><th>In flight</th><th class="num">Errors</th>
+      <th class="num">p50</th><th class="num">p95</th><th class="num">p99</th>
+      <th class="num">CPU</th><th class="num">RSS</th><th class="num">Threads</th>
+      <th class="num">DB conns</th><th class="num">Queue</th></tr></thead>
+    <tbody><tr><td colspan="11" class="muted">…</td></tr></tbody>
+  </table>
+</div>
+
+<div class="panel">
+  <h2>Configuration</h2>
+  <pre class="report" id="config">Loading…</pre>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function kv(obj) {
+  return Object.entries(obj).map(([k, v]) =>
+    `<dt>${k.replace(/_/g, ' ')}</dt><dd>${escapeHtml(String(v))}</dd>`).join('');
+}
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
+async function tick() {
+  const [h, q, m] = await Promise.all([
+    api('/api/system/health'), api('/api/system/queue'), api('/api/system/metrics'),
+  ]);
+  if (h) document.getElementById('health').innerHTML = kv(h);
+  if (q) document.getElementById('queue').innerHTML = kv(q);
+  if (m) {
+    document.querySelector('#metrics tbody').innerHTML = `<tr>
+      <td class="num">${m.requests_total}</td>
+      <td class="num">${m.requests_in_flight}</td>
+      <td class="num">${m.errors_total}</td>
+      <td class="num">${m.latency_p50_ms} ms</td>
+      <td class="num">${m.latency_p95_ms} ms</td>
+      <td class="num">${m.latency_p99_ms} ms</td>
+      <td class="num">${m.cpu_percent}%</td>
+      <td class="num">${m.rss_mb} MB</td>
+      <td class="num">${m.threads}</td>
+      <td class="num">${m.db_pool_checked_out}</td>
+      <td class="num">${m.queue_depth}</td></tr>`;
+  }
+}
+
+(async () => {
+  const c = await api('/api/system/config');
+  if (c) document.getElementById('config').textContent = JSON.stringify(c, null, 2);
+  tick();
+  setInterval(tick, 3000);
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Courses — {{ portal_name }}{% endblock %}
+{% block content %}
+<div class="panel">
+  <h1>Courses</h1>
+  <table>
+    <thead><tr><th>Code</th><th>Title</th><th></th></tr></thead>
+    <tbody>
+      {% for c in courses %}
+      <tr>
+        <td><b>{{ c.code }}</b></td>
+        <td>{{ c.title }}</td>
+        <td><a class="btn tiny" href="/dashboard">Assignments</a></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="3" class="muted">You are not in any course yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="panel" id="teach">
+  <h2>Create a course</h2>
+  <p class="muted small">Teachers only. Creating a course also creates its folder tree on your Drive.</p>
+  <form id="newcourse" class="grid2">
+    <label>Code <input name="code" required placeholder="CS301" maxlength="32"></label>
+    <label>Title <input name="title" required placeholder="Distributed Systems"></label>
+    <label>Academic year <input name="academic_year" value="2025-26"></label>
+    <label>Semester <input name="semester" type="number" value="3" min="1" max="8"></label>
+    <div style="grid-column:1/-1"><button class="btn primary" type="submit">Create course</button></div>
+  </form>
+</div>
+
+<div class="panel">
+  <h2>Join a course</h2>
+  <form id="join">
+    <label>Course ID <input name="course_id" type="number" required style="max-width:160px"></label>
+    <button class="btn" type="submit">Enrol me</button>
+  </form>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.getElementById('newcourse').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = Object.fromEntries(new FormData(e.target).entries());
+  f.semester = Number(f.semester);
+  const res = await api('/api/courses', { method: 'POST', body: JSON.stringify(f) });
+  if (res) { banner(`Created ${res.code}`); location.reload(); }
+});
+document.getElementById('join').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const id = new FormData(e.target).get('course_id');
+  const res = await api(`/api/courses/${id}/enrol`, { method: 'POST' });
+  if (res) { banner('Enrolled'); location.reload(); }
+});
+</script>
+{% endblock %}

@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+{% block title %}Review — {{ portal_name }}{% endblock %}
+{% block content %}
+<div class="panel">
+  <div class="muted small"><a href="/dashboard">← Assignments</a></div>
+  <h1 id="title">Loading…</h1>
+  <div id="summary" class="statusline"></div>
+  <div class="note" id="driveloc" style="margin-top:10px"></div>
+</div>
+
+<div class="panel">
+  <div style="display:flex;gap:10px;align-items:center;margin-bottom:8px">
+    <h2 style="margin:0">Submissions</h2>
+    <span class="muted small">Sorted by roll number. Scores are advisory.</span>
+    <span style="margin-left:auto">
+      <button class="btn tiny" id="refresh">Refresh</button>
+      <button class="btn tiny" id="csv">Download CSV</button>
+    </span>
+  </div>
+  <table id="table">
+    <thead>
+      <tr>
+        <th>Roll</th><th>Student</th><th class="num">Att.</th><th>File (on Drive)</th>
+        <th class="num">Submitted</th><th class="num">Words</th>
+        <th class="num">Similarity</th><th class="num">AI score</th>
+        <th>Verdict</th><th class="num">Marks</th><th></th>
+      </tr>
+    </thead>
+    <tbody><tr><td colspan="11" class="muted">Loading…</td></tr></tbody>
+  </table>
+</div>
+
+<div class="panel hidden" id="detail">
+  <h2 id="detail-title">Report</h2>
+  <div id="detail-body" class="kv"></div>
+  <pre class="report" id="detail-json"></pre>
+  <div style="margin-top:8px">
+    <label>Marks <input id="marks" type="number" step="0.5" style="max-width:120px"></label>
+    <label>Feedback <textarea id="feedback" rows="3"></textarea></label>
+    <button class="btn primary" id="grade">Save grade</button>
+    <button class="btn" id="reanalyse">Re-run analysis</button>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const ASSIGNMENT_ID = {{ assignment_id }};
+let thresholds = { similarity: {{ thresholds.similarity }}, ai: {{ thresholds.ai }} };
+let rows = [];
+
+async function load() {
+  const summary = await api(`/api/assignments/${ASSIGNMENT_ID}/summary`);
+  rows = await api(`/api/assignments/${ASSIGNMENT_ID}/submissions`) || [];
+  const loc = await api(`/api/assignments/${ASSIGNMENT_ID}/drive-location`);
+
+  if (summary) {
+    const a = summary.assignment;
+    thresholds.similarity = window.PORTAL?.thresholds?.similarity ?? thresholds.similarity;
+    document.getElementById('title').textContent =
+      `${summary.course.code} ${a.code} — ${a.title}`;
+    document.getElementById('summary').innerHTML = `
+      <span>Submissions <b>${summary.total}</b></span>
+      <span>Analysed <b>${summary.analysed}</b></span>
+      <span>In queue <b>${summary.pending}</b></span>
+      <span>Flagged <b>${summary.flagged}</b></span>
+      <span>Mean similarity <b>${pct(summary.mean_similarity)}</b></span>
+      <span>Mean AI score <b>${pct(summary.mean_ai_score)}</b></span>
+      <span>Due <b>${fmtDate(a.due_at)}</b></span>`;
+  }
+  if (loc) {
+    document.getElementById('driveloc').innerHTML = `
+      <b>On your Google Drive</b><br>
+      <code>${escapeHtml(loc.submissions_folder)}/</code> → <code>${escapeHtml(loc.filename_pattern)}</code><br>
+      <code>${escapeHtml(loc.reports_folder)}/</code> → <code>${escapeHtml(loc.report_pattern)}</code>
+      and <code>${escapeHtml(loc.roster_file)}</code>`;
+  }
+  render();
+}
+
+function render() {
+  const tbody = document.querySelector('#table tbody');
+  if (!rows.length) { tbody.innerHTML = '<tr><td colspan="11" class="muted">No submissions yet.</td></tr>'; return; }
+  tbody.innerHTML = rows.map((s) => `
+    <tr data-id="${s.id}">
+      <td>${escapeHtml(s.roll_number || '—')}</td>
+      <td>${escapeHtml(s.student_name || '')}<div class="muted small">${escapeHtml(s.student_email || '')}</div></td>
+      <td class="num">${s.attempt}</td>
+      <td class="small">${escapeHtml(s.archived_name || s.filename)}</td>
+      <td class="num small">${fmtDate(s.submitted_at)}</td>
+      <td class="num">${s.word_count || '—'}</td>
+      <td class="num">${scoreCell(s.similarity_score, thresholds.similarity)}</td>
+      <td class="num">${scoreCell(s.ai_score, thresholds.ai)}</td>
+      <td>${verdictPill(s.verdict, s.flagged, s.analysis_status)}</td>
+      <td class="num">${s.marks_awarded ?? '—'}</td>
+      <td><button class="btn tiny" data-open="${s.id}">Open</button>
+          <a class="btn tiny" href="/api/submissions/${s.id}/download">File</a></td>
+    </tr>`).join('');
+  tbody.querySelectorAll('[data-open]').forEach((b) =>
+    b.addEventListener('click', () => openReport(Number(b.dataset.open))));
+}
+
+async function openReport(id) {
+  const r = await api(`/api/submissions/${id}/report`);
+  if (!r) return;
+  document.getElementById('detail').classList.remove('hidden');
+  document.getElementById('detail-title').textContent =
+    `${r.roll_number || ''} ${r.student_name} — ${r.assignment_title}`;
+  const sim = r.report?.similarity || {};
+  const ai = r.report?.ai_detection || {};
+  const rowsKv = [
+    ['Similarity index', scoreCell(r.similarity_score, r.similarity_threshold)],
+    ['AI detection score', scoreCell(r.ai_score, r.ai_threshold)],
+    ['Verdict', verdictPill(r.verdict, r.flagged, r.analysis_status)],
+    ['Words', r.word_count],
+    ['Verbatim overlap', pct(sim.components?.verbatim_overlap)],
+    ['Closest peer', escapeHtml(sim.strongest_match_label || '—')],
+    ['Peer Jaccard', pct(sim.components?.peer_max_jaccard)],
+    ['Reference overlap', pct(sim.components?.reference_overlap)],
+    ['Corpus compared', `${sim.documents_compared ?? '—'} of ${r.report?.provenance?.corpus_size ?? '—'}`],
+    ['AI confidence', pct(ai.confidence)],
+  ];
+  document.getElementById('detail-body').innerHTML =
+    rowsKv.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
+  document.getElementById('detail-json').textContent = JSON.stringify(r.report, null, 2);
+
+  const sub = rows.find((s) => s.id === id);
+  document.getElementById('marks').value = sub?.marks_awarded ?? '';
+  document.getElementById('feedback').value = sub?.feedback ?? '';
+  document.getElementById('grade').onclick = async () => {
+    const res = await api(`/api/submissions/${id}/grade`, {
+      method: 'POST',
+      body: JSON.stringify({
+        marks: Number(document.getElementById('marks').value),
+        feedback: document.getElementById('feedback').value,
+      }),
+    });
+    if (res) { banner('Grade saved'); load(); }
+  };
+  document.getElementById('reanalyse').onclick = async () => {
+    if (await api(`/api/submissions/${id}/reanalyse`, { method: 'POST' })) {
+      banner('Re-analysis queued'); setTimeout(load, 1500);
+    }
+  };
+  document.getElementById('detail').scrollIntoView({ behavior: 'smooth' });
+}
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
+document.getElementById('refresh').addEventListener('click', load);
+document.getElementById('csv').addEventListener('click', async () => {
+  const header = ['roll_number','student','email','attempt','filename','similarity','ai','verdict','flagged','marks'];
+  const lines = [header.join(',')].concat(rows.map((s) => [
+    s.roll_number || '', `"${(s.student_name||'').replace(/"/g,'""')}"`, s.student_email || '',
+    s.attempt, `"${(s.archived_name||s.filename||'').replace(/"/g,'""')}"`,
+    s.similarity_score ?? '', s.ai_score ?? '', s.verdict || '', s.flagged ? 'yes' : 'no',
+    s.marks_awarded ?? '',
+  ].join(',')));
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `assignment_${ASSIGNMENT_ID}_summary.csv`;
+  a.click();
+});
+
+load();
+</script>
+{% endblock %}

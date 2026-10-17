@@ -1,0 +1,228 @@
+{% extends "base.html" %}
+{% block title %}Assignment {{ assignment_id }} — {{ portal_name }}{% endblock %}
+{% block content %}
+<div class="panel" id="head">
+  <div class="muted small"><a href="/dashboard">← Assignments</a></div>
+  <h1 id="title">Loading…</h1>
+  <div id="meta" class="muted small"></div>
+  <div id="brief" class="note" style="margin-top:10px"></div>
+</div>
+
+<div class="grid2">
+  <div class="panel">
+    <h2>Work in progress</h2>
+    <p class="muted small">
+      Everything you type is autosaved to <b>your own</b> Google Drive, under
+      <code>College Coursework/…/Drafts/</code>. Nothing reaches your instructor
+      until you press Submit.
+    </p>
+    <textarea id="editor" rows="18" placeholder="Start writing…"></textarea>
+    <div class="statusline">
+      <span>Words <b id="wc">0</b></span>
+      <span>Draft <b id="rev">—</b></span>
+      <span id="savestate" class="muted">idle</span>
+      <span style="margin-left:auto">
+        <button class="btn tiny" id="save">Save now</button>
+        <button class="btn tiny" id="snapshot">Pin revision</button>
+      </span>
+    </div>
+    <hr>
+    <label>Or upload a file as your draft
+      <input type="file" id="draftfile">
+    </label>
+    <label><input type="checkbox" id="snapshotfile"> Pin this upload as a numbered revision</label>
+    <div class="statusline"><span id="draftpath" class="muted small"></span></div>
+    <details style="margin-top:8px">
+      <summary class="small muted">Draft revision history</summary>
+      <table id="history"><thead><tr><th>Rev</th><th>When</th><th>Kind</th><th class="num">Size</th><th>Drive path</th></tr></thead><tbody></tbody></table>
+    </details>
+  </div>
+
+  <div>
+    <div class="panel">
+      <h2>Submit</h2>
+      <div id="substate" class="muted small">No submission yet.</div>
+      <hr>
+      <label>Upload the file to submit
+        <input type="file" id="submitfile">
+      </label>
+      <button class="btn primary" id="submitfile-btn" disabled>Submit this file</button>
+      <button class="btn" id="submitdraft-btn">Submit my saved draft</button>
+      <p class="small muted" style="margin-top:8px">
+        Submitting copies the file into your instructor's Drive and starts the
+        similarity + AI analysis. You can resubmit if the assignment allows it.
+      </p>
+    </div>
+
+    <div class="panel">
+      <h2>Integrity report</h2>
+      <div id="scores" class="kv"></div>
+      <div id="verdictline" style="margin:10px 0"></div>
+      <details>
+        <summary class="small muted">Full report (JSON, as stored on Drive)</summary>
+        <pre class="report" id="report">—</pre>
+      </details>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const ASSIGNMENT_ID = {{ assignment_id }};
+let thresholds = { similarity: {{ thresholds.similarity }}, ai: {{ thresholds.ai }} };
+let currentSubmission = null;
+let dirty = false;
+
+async function loadAssignment() {
+  const a = await api(`/api/assignments/${ASSIGNMENT_ID}`);
+  if (!a) return;
+  document.getElementById('title').textContent = `${a.code} — ${a.title}`;
+  document.getElementById('meta').innerHTML =
+    `Due <b>${fmtDate(a.due_at)}</b> · opens ${fmtDate(a.opens_at)} · max ${a.max_marks} marks · ` +
+    `${a.allow_late ? 'late allowed' : 'no late submissions'} · ${a.allow_resubmit ? 'resubmission allowed' : 'one attempt'}`;
+  document.getElementById('brief').textContent = a.brief || 'No brief was published.';
+}
+
+async function loadDraft() {
+  const data = await api(`/api/assignments/${ASSIGNMENT_ID}/draft`);
+  if (!data) return;
+  const tbody = document.querySelector('#history tbody');
+  tbody.innerHTML = (data.history || []).map((r) => `
+    <tr><td class="num">r${r.revision}</td><td class="small">${fmtDate(r.saved_at)}</td>
+    <td class="small">${r.kind}</td><td class="num">${fmtBytes(r.size_bytes)}</td>
+    <td class="small muted">${escapeHtml(r.drive_path || '')}</td></tr>`).join('') ||
+    '<tr><td colspan="5" class="muted">Nothing saved yet.</td></tr>';
+
+  if (data.draft) {
+    document.getElementById('rev').textContent = 'r' + data.draft.revision;
+    document.getElementById('draftpath').textContent = 'On your Drive: ' + data.draft.drive_path;
+    const editor = document.getElementById('editor');
+    if (!editor.value && !dirty) {
+      const content = await api(`/api/assignments/${ASSIGNMENT_ID}/draft/content`);
+      if (content) editor.value = content.text;
+    }
+  }
+  updateWordCount();
+}
+
+function updateWordCount() {
+  const text = document.getElementById('editor').value;
+  document.getElementById('wc').textContent = text.trim() ? text.trim().split(/\s+/).length : 0;
+}
+
+async function saveDraft(snapshot = false, label = 'Autosaved') {
+  const text = document.getElementById('editor').value;
+  const state = document.getElementById('savestate');
+  state.textContent = 'saving…';
+  const res = await api(`/api/assignments/${ASSIGNMENT_ID}/draft`, {
+    method: 'POST',
+    body: JSON.stringify({ text, filename: 'draft.txt', snapshot }),
+  });
+  if (!res) { state.textContent = 'save failed'; return; }
+  dirty = false;
+  state.textContent = `${label} to your Drive · r${res.revision} · ${new Date().toLocaleTimeString()}`;
+  document.getElementById('rev').textContent = 'r' + res.revision;
+  loadDraft();
+}
+
+const autosave = debounce(() => { if (dirty) saveDraft(false, 'Autosaved'); }, 1500);
+
+async function uploadDraft() {
+  const input = document.getElementById('draftfile');
+  if (!input.files.length) return;
+  const fd = new FormData();
+  fd.append('file', input.files[0]);
+  fd.append('snapshot', document.getElementById('snapshotfile').checked ? 'true' : 'false');
+  const res = await api(`/api/assignments/${ASSIGNMENT_ID}/draft/upload`, { method: 'POST', body: fd });
+  if (res) { banner(`Draft r${res.revision} saved to your Drive`); loadDraft(); }
+}
+
+async function loadSubmission() {
+  const data = await api(`/api/assignments/${ASSIGNMENT_ID}/my-submission`);
+  if (!data || !data.submission) {
+    document.getElementById('substate').textContent = 'No submission yet.';
+    return;
+  }
+  currentSubmission = data.submission;
+  const s = data.submission;
+  document.getElementById('substate').innerHTML =
+    `<b>${escapeHtml(s.filename)}</b> · attempt ${s.attempt} · ${fmtBytes(s.size_bytes)}<br>` +
+    `submitted ${fmtDate(s.submitted_at)} · status <span class="pill pill-mute">${s.status}</span><br>` +
+    `archived as <code>${escapeHtml(s.archived_name || '—')}</code>` +
+    (s.teacher_file_id ? `<br><span class="small muted">on your instructor's Drive (file ${s.teacher_file_id})</span>` : '');
+  loadReport();
+}
+
+async function loadReport() {
+  if (!currentSubmission) return;
+  const r = await api(`/api/submissions/${currentSubmission.id}/report`);
+  if (!r) return;
+  thresholds.similarity = r.similarity_threshold;
+  thresholds.ai = r.ai_threshold;
+  const rows = [
+    ['Similarity index', scoreCell(r.similarity_score, r.similarity_threshold)],
+    ['AI detection score', scoreCell(r.ai_score, r.ai_threshold)],
+    ['Words analysed', `<b>${r.word_count || 0}</b>`],
+    ['Analysis', `<span class="pill pill-mute">${r.analysis_status}</span>`],
+    ['Thresholds', `similarity ≥ ${pct(r.similarity_threshold, 0)} · AI ≥ ${pct(r.ai_threshold, 0)}`],
+  ];
+  if (r.report && r.report.similarity) {
+    const c = r.report.similarity.components || {};
+    rows.push(['Verbatim overlap', pct(c.verbatim_overlap)]);
+    rows.push(['Closest peer match', `${escapeHtml(r.report.similarity.strongest_match_label || 'none')} (${pct(c.peer_max_jaccard)})`]);
+    rows.push(['Reference overlap', pct(c.reference_overlap)]);
+    rows.push(['Documents compared', r.report.similarity.documents_compared]);
+  }
+  if (r.report && r.report.ai_detection) {
+    rows.push(['AI confidence', pct(r.report.ai_detection.confidence)]);
+    rows.push(['AI engine', escapeHtml(r.report.ai_detection.engine || '')]);
+  }
+  document.getElementById('scores').innerHTML =
+    rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
+  document.getElementById('verdictline').innerHTML = verdictPill(r.verdict, r.flagged, r.analysis_status);
+  document.getElementById('report').textContent = JSON.stringify(r.report, null, 2);
+
+  if (r.analysis_status === 'pending' || r.analysis_status === 'running') {
+    setTimeout(loadReport, 2000);
+  }
+}
+
+async function submitFile() {
+  const input = document.getElementById('submitfile');
+  if (!input.files.length) return;
+  const fd = new FormData();
+  fd.append('file', input.files[0]);
+  const res = await api(`/api/assignments/${ASSIGNMENT_ID}/submit`, { method: 'POST', body: fd });
+  if (res) { banner(`Submitted attempt ${res.attempt}. Analysis queued.`); loadSubmission(); loadDraft(); }
+}
+
+async function submitDraft() {
+  const res = await api(`/api/assignments/${ASSIGNMENT_ID}/submit-draft`, { method: 'POST' });
+  if (res) { banner(`Submitted attempt ${res.attempt}. Analysis queued.`); loadSubmission(); }
+}
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
+document.getElementById('editor').addEventListener('input', () => { dirty = true; updateWordCount(); autosave(); });
+document.getElementById('save').addEventListener('click', () => saveDraft(false, 'Saved'));
+document.getElementById('snapshot').addEventListener('click', () => saveDraft(true, 'Pinned'));
+document.getElementById('draftfile').addEventListener('change', uploadDraft);
+document.getElementById('submitfile').addEventListener('change', (e) => {
+  document.getElementById('submitfile-btn').disabled = !e.target.files.length;
+});
+document.getElementById('submitfile-btn').addEventListener('click', submitFile);
+document.getElementById('submitdraft-btn').addEventListener('click', submitDraft);
+
+(async () => {
+  await loadWhoami();
+  await loadAssignment();
+  await loadDraft();
+  await loadSubmission();
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}Drive — {{ portal_name }}{% endblock %}
+{% block content %}
+<div class="panel">
+  <h1>Google Drive layout</h1>
+  <p class="muted small">
+    Provider: <code>{{ drive_provider }}</code>. With the real provider these are
+    live folder listings; with the offline simulator they are the same tree on
+    local disk, so the naming policy is verifiable without credentials.
+  </p>
+  <div id="layout" class="kv"></div>
+</div>
+
+<div class="grid2">
+  <div class="panel">
+    <div style="display:flex;gap:8px;align-items:baseline">
+      <h2 style="margin:0">Instructor / institutional Drive</h2>
+      <button class="btn tiny" id="reload-teacher" style="margin-left:auto">Reload</button>
+    </div>
+    <div id="teacher-meta" class="muted small"></div>
+    <div class="tree" id="teacher-tree">Loading…</div>
+  </div>
+  <div class="panel">
+    <div style="display:flex;gap:8px;align-items:baseline">
+      <h2 style="margin:0">My Drive (drafts)</h2>
+      <button class="btn tiny" id="reload-mine" style="margin-left:auto">Reload</button>
+    </div>
+    <div id="mine-meta" class="muted small"></div>
+    <div class="tree" id="mine-tree">Loading…</div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function renderTree(entries) {
+  if (!entries || !entries.length) return '<span class="meta">empty</span>';
+  const sorted = [...entries].sort((a, b) => a.path.localeCompare(b.path));
+  return sorted.map((e) => {
+    const depth = e.path.split('/').length - 1;
+    const indent = '  '.repeat(depth);
+    const label = e.type === 'folder'
+      ? `<span class="dir">${escapeHtml(e.name)}/</span>`
+      : `<span class="file">${escapeHtml(e.name)}</span>`;
+    const meta = e.type === 'file' ? ` <span class="meta">${fmtBytes(e.size)}</span>` : '';
+    return `${indent}${label}${meta}`;
+  }).join('\n');
+}
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
+async function loadLayout() {
+  const l = await api('/api/drive/layout');
+  if (!l) { document.getElementById('layout').textContent = 'No courses yet.'; return; }
+  const kv = [
+    ['Course', `${escapeHtml(l.course.code)} — ${escapeHtml(l.course.title)} (${escapeHtml(l.course.term)})`],
+    ['Instructor: submissions', escapeHtml(l.teacher_drive.submissions) + '/'],
+    ['Instructor: filename', '<code>' + escapeHtml(l.teacher_drive.filename) + '</code>'],
+    ['Instructor: reports', escapeHtml(l.teacher_drive.reports) + '/'],
+    ['Student: drafts', escapeHtml(l.student_drive.drafts) + '/'],
+    ['Student: draft filename', '<code>' + escapeHtml(l.student_drive.filename) + '</code>'],
+  ];
+  document.getElementById('layout').innerHTML = kv.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
+}
+
+async function loadTeacher() {
+  const el = document.getElementById('teacher-tree');
+  const res = await api('/api/drive/tree');
+  if (!res) { el.textContent = 'not available'; return; }
+  document.getElementById('teacher-meta').textContent =
+    `account: ${res.account}${res.degraded ? ' (institutional — instructor has not linked Drive)' : ''} · ${res.entries.length} entries`;
+  el.innerHTML = renderTree(res.entries);
+}
+
+async function loadMine() {
+  const el = document.getElementById('mine-tree');
+  const res = await api('/api/drive/tree/mine');
+  if (!res) { el.textContent = 'not available'; return; }
+  document.getElementById('mine-meta').textContent =
+    `account: ${res.account} · ${res.entries.length} entries`;
+  el.innerHTML = renderTree(res.entries);
+}
+
+document.getElementById('reload-teacher').addEventListener('click', loadTeacher);
+document.getElementById('reload-mine').addEventListener('click', loadMine);
+loadLayout(); loadTeacher(); loadMine();
+</script>
+{% endblock %}

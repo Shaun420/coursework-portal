@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in — {{ portal_name }}</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body class="center">
+<main class="card">
+  <h1>{{ portal_name }}</h1>
+  <p class="muted">
+    Assignments sync to your own Google Drive while you work, and are archived
+    to your instructor's Drive on submission with a similarity and AI-detection
+    report attached.
+  </p>
+
+  <hr>
+
+  {% if google_configured %}
+    <a class="btn primary" href="/auth/google/login">Continue with Google</a>
+    <p class="small muted">
+      Grants Drive access to files this app creates, so drafts land in your own
+      account and nothing else can read them.
+    </p>
+  {% else %}
+    <div class="note">
+      <strong>Google OAuth is not configured on this server.</strong><br>
+      Set <code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code>, then
+      restart. Until then the portal runs against an offline Drive simulator
+      (<code>DRIVE_PROVIDER={{ drive_provider }}</code>) that reproduces the same
+      folder tree and filenames on local disk.
+    </div>
+  {% endif %}
+
+  {% if dev_signin %}
+  <hr>
+  <h2>Development sign-in</h2>
+  <form id="devform">
+    <label>Email
+      <input name="email" type="email" required placeholder="meera@college.edu" value="meera@college.edu">
+    </label>
+    <label>Display name
+      <input name="name" placeholder="Meera Iyer" value="Meera Iyer">
+    </label>
+    <label>Roll number
+      <input name="roll_number" placeholder="21CS042" value="21CS042">
+    </label>
+    <button class="btn" type="submit">Sign in</button>
+  </form>
+  <p class="small muted">Disabled when <code>PORTAL_ENV=production</code>.</p>
+  {% endif %}
+</main>
+<script src="/static/app.js"></script>
+<script>
+const form = document.getElementById('devform');
+if (form) form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const body = Object.fromEntries(new FormData(form).entries());
+  const res = await api('/auth/dev/login', { method: 'POST', body: JSON.stringify(body) });
+  if (res) location.href = '/dashboard';
+});
+</script>
+</body>
+</html>
