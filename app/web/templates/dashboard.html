@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% block title %}Assignments — {{ portal_name }}{% endblock %}
+{% block content %}
+<div class="panel">
+  <div style="display:flex;gap:12px;align-items:baseline;flex-wrap:wrap">
+    <h1 style="margin:0">Assignments</h1>
+    <span id="rolehint" class="muted small"></span>
+    <span style="margin-left:auto" id="refreshwrap">
+      <button class="btn tiny" id="refresh">Refresh</button>
+    </span>
+  </div>
+  <div id="loading" class="muted small">Loading…</div>
+  <table id="table" class="hidden">
+    <thead>
+      <tr>
+        <th>Course</th><th>Code</th><th>Title</th><th>Due</th>
+        <th id="colA" class="num">My status</th>
+        <th id="colB" class="num">Similarity</th>
+        <th id="colC" class="num">AI score</th>
+        <th>Verdict</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</div>
+
+<div class="panel hidden" id="teacherpanel">
+  <h2>New assignment</h2>
+  <form id="newassignment" class="grid2">
+    <label>Course
+      <select name="course_id" id="coursepick" required></select>
+    </label>
+    <label>Code <input name="code" value="A1" required maxlength="16"></label>
+    <label>Title <input name="title" required placeholder="Consensus essay"></label>
+    <label>Max marks <input name="max_marks" type="number" value="100" min="1"></label>
+    <label>Due (local time) <input name="due_at" type="datetime-local" required></label>
+    <label>Opens (local time) <input name="opens_at" type="datetime-local"></label>
+    <label style="grid-column:1/-1">Brief
+      <textarea name="brief" rows="3" placeholder="What should the student produce?"></textarea>
+    </label>
+    <label><input type="checkbox" name="allow_late" checked> Allow late submission</label>
+    <label><input type="checkbox" name="allow_resubmit" checked> Allow resubmission</label>
+    <div style="grid-column:1/-1"><button class="btn primary" type="submit">Create assignment</button></div>
+  </form>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let thresholds = { similarity: {{ thresholds.similarity }}, ai: {{ thresholds.ai }} };
+
+async function load() {
+  const rows = await api('/api/assignments');
+  if (!rows) return;
+  const me = window.PORTAL || await loadWhoami();
+  const isStaff = me && (me.user.role === 'teacher' || me.user.role === 'admin');
+  thresholds = (me && me.thresholds) || thresholds;
+
+  document.getElementById('loading').classList.add('hidden');
+  const table = document.getElementById('table');
+  table.classList.remove('hidden');
+  document.getElementById('rolehint').textContent = isStaff
+    ? 'You teach these courses — click Review to see the cohort.'
+    : 'Your work autosaves to your own Drive until you submit.';
+
+  document.getElementById('colA').textContent = isStaff ? 'Submitted' : 'My status';
+  document.getElementById('colB').textContent = isStaff ? 'Flagged' : 'Similarity';
+  document.getElementById('colC').textContent = isStaff ? 'Students' : 'AI score';
+
+  const tbody = table.querySelector('tbody');
+  tbody.innerHTML = '';
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="9" class="muted">Nothing here yet.</td></tr>';
+  }
+  for (const a of rows) {
+    const tr = document.createElement('tr');
+    const overdue = new Date(a.due_at) < new Date();
+    tr.innerHTML = `
+      <td>${a.course_code || ''}</td>
+      <td><b>${a.code}</b></td>
+      <td>${escapeHtml(a.title)}<div class="muted small">${escapeHtml(a.course_title || '')}</div></td>
+      <td class="small">${fmtDate(a.due_at)}${overdue ? ' <span class="pill pill-warn">past due</span>' : ''}</td>
+      ${isStaff
+        ? `<td class="num">${a.submission_count}</td>
+           <td class="num">${a.flagged_count ? `<span class="pill pill-flag">${a.flagged_count}</span>` : '0'}</td>
+           <td class="num">${a.student_count}</td>
+           <td>—</td>
+           <td><a class="btn tiny" href="/assignment/${a.id}/review">Review</a>
+               <a class="btn tiny" href="/assignment/${a.id}">Open</a></td>`
+        : `<td class="num">${a.my_status || '<span class="muted">not started</span>'}</td>
+           <td class="num">${scoreCell(a.my_similarity, thresholds.similarity)}</td>
+           <td class="num">${scoreCell(a.my_ai_score, thresholds.ai)}</td>
+           <td>${verdictPill(null, false, a.my_status ? 'done' : 'pending')}</td>
+           <td><a class="btn tiny" href="/assignment/${a.id}">Open</a></td>`}
+    `;
+    tbody.appendChild(tr);
+  }
+
+  if (isStaff) {
+    document.getElementById('teacherpanel').classList.remove('hidden');
+    const courses = await api('/api/courses');
+    const sel = document.getElementById('coursepick');
+    sel.innerHTML = (courses || []).map((c) => `<option value="${c.id}">${escapeHtml(c.code)} — ${escapeHtml(c.title)}</option>`).join('');
+  }
+}
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
+document.getElementById('refresh').addEventListener('click', load);
+
+document.getElementById('newassignment').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = new FormData(e.target);
+  const body = {
+    course_id: Number(f.get('course_id')),
+    code: f.get('code'),
+    title: f.get('title'),
+    brief: f.get('brief') || '',
+    max_marks: Number(f.get('max_marks') || 100),
+    due_at: new Date(f.get('due_at')).toISOString(),
+    opens_at: f.get('opens_at') ? new Date(f.get('opens_at')).toISOString() : null,
+    allow_late: !!f.get('allow_late'),
+    allow_resubmit: !!f.get('allow_resubmit'),
+  };
+  const res = await api('/api/assignments', { method: 'POST', body: JSON.stringify(body) });
+  if (res) { banner(`Created ${res.code} — ${res.title}`); load(); }
+});
+
+load();
+</script>
+{% endblock %}

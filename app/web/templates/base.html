@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}{{ portal_name }}{% endblock %}</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/dashboard">{{ portal_name }}</a>
+  <nav>
+    <a href="/dashboard">Assignments</a>
+    <a href="/courses">Courses</a>
+    <a href="/drive">Drive</a>
+    <a href="/system">System</a>
+  </nav>
+  <div class="topbar-right">
+    <span class="env env-{{ env }}">{{ env }}</span>
+    <span id="whoami" class="who">…</span>
+    <button id="logout" class="linklike">Sign out</button>
+  </div>
+</header>
+
+<main class="wrap">
+  <div id="banner" class="banner hidden"></div>
+  {% block content %}{% endblock %}
+</main>
+
+<footer class="foot">
+  Integrity thresholds — similarity ≥ {{ '%.0f'|format(thresholds.similarity * 100) }}%,
+  AI ≥ {{ '%.0f'|format(thresholds.ai * 100) }}%.
+  Scores are decision support for a human reviewer, not a verdict.
+</footer>
+<script src="/static/app.js"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

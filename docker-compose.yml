@@ -1,0 +1,93 @@
+# docker-compose.yml — a single-host deployment that scales out horizontally.
+#
+#   cp .env.example .env      # set PORTAL_SECRET_KEY and POSTGRES_PASSWORD
+#   docker compose up -d --build
+#   docker compose up -d --scale portal=4      # more replicas
+#
+# Topology
+#   nginx      static files, gzip, health checks
+#   portal×N   stateless API/UI replicas behind nginx
+#   postgres   the only durable shared state
+#
+# No session store is needed: sessions are HMAC-signed stateless cookies
+# (app/services/auth.py:make_session_token), so any replica can serve any
+# request and the load balancer needs no stickiness. The one piece of shared
+# secret material is PORTAL_SECRET_KEY — every replica must agree on it, both
+# to verify session cookies and to decrypt stored Google OAuth tokens
+# (app/core/crypto.py derives the Fernet key from it).
+
+x-portal-env: &portal-env
+  PORTAL_ENV: production
+  PORTAL_SECRET_KEY: ${PORTAL_SECRET_KEY:?set PORTAL_SECRET_KEY in .env}
+  PORTAL_BASE_URL: ${PORTAL_BASE_URL:-http://localhost}
+  PORTAL_DATABASE_URL: postgresql+asyncpg://portal:${POSTGRES_PASSWORD:-portal}@postgres:5432/portal
+  DRIVE_PROVIDER: ${DRIVE_PROVIDER:-google}
+  GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+  GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+  GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-}
+  SIMILARITY_THRESHOLD: ${SIMILARITY_THRESHOLD:-0.50}
+  AI_DETECTION_THRESHOLD: ${AI_DETECTION_THRESHOLD:-0.50}
+  ANALYSIS_WORKERS: ${ANALYSIS_WORKERS:-2}
+  ANALYSIS_CPU_THREADS: ${ANALYSIS_CPU_THREADS:-2}
+  DB_POOL_SIZE: ${DB_POOL_SIZE:-20}
+  DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-20}
+  RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-240}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: portal
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-portal}
+      POSTGRES_DB: portal
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U portal -d portal"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    shm_size: 256mb
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  portal:
+    build: .
+    restart: unless-stopped
+    environment: *portal-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      # Staged uploads. With more than one replica this must be a shared
+      # filesystem (NFS/EFS) or an object store — see DEPLOYMENT.md.
+      - portaldata:/srv/app/data
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+    expose:
+      - "8000"
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      - portal
+    ports:
+      - "80:80"
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  pgdata:
+  portaldata:

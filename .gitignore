@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+
+# Local state / data
+data/
+*.db
+*.db-wal
+*.db-shm
+storage/
+.env
+.env.local
+*.log
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

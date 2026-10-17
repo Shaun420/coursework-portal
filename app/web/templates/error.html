@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Not found — {{ portal_name }}{% endblock %}
+{% block content %}
+<div class="panel">
+  <h1>Not found</h1>
+  <p class="muted">{{ message or "That page does not exist." }}</p>
+  <a class="btn" href="/dashboard">Back to assignments</a>
+</div>
+{% endblock %}
